@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from "axios";
-//import * as marked from "marked";
+import * as marked from "marked";
 
 import { escapeQuotes, fuzzyIncludes, getUnixTime, rateLimit } from "../util";
 
@@ -110,58 +110,107 @@ const engine: Engine = {
               url: `https://github.com/${org}/${r.name}`,
             }));
         })(),
-        // Search issues and pull requests
-        (async () => {
-          if (!(client && org)) {
-            throw Error("Engine not initialized");
-          }
-
-          try {
-            // TODO: Paginate
-            // https://developer.github.com/v3/search/#search-code
-            const data: {
-              items: {
-                html_url: string;
-                name: string;
-                text_matches: {
-                  fragment: string;
-                }[];
-                updated_at: string;
-                user: { login: string };
-              }[];
-            } = (
-              await client.get("/search/code", {
-                headers: {
-                  Accept: "application/vnd.github.text-match+json"
-                },
-                params: {
-                  per_page: 100,
-                  q: /\b(is|author|org):\w/.test(q)
-                    ? /\borg:\w/.test(q)
-                      ? q
-                      : `org:${org} ${q}`
-                    : `org:${org} "${escapeQuotes(q)}"`,
-                },
-              })
-            ).data;
-            return data.items.map(item => ({
-              modified: getUnixTime(item.updated_at),
-              snippet: [
-                ...(item.text_matches ?? [])
-                .map(m => `${m.fragment}`)
-              ].join("<br>"),
-              title: `"Code" in ${
-                item.html_url.match(/github\.com\/([^\/]+\/[^\/]+)\//)?.[1]
-              }: ${item.name}`,
-              url: item.html_url,
-            }));
-          } catch {
-            return [];
-          }
-        })(),
+        searchCode(q),
+        searchIssuesAndPullRequests(q),
       ])
     ).flat();
   },
 };
 
 export default engine;
+function searchIssuesAndPullRequests(q: string): Promise<{ modified: number; snippet: string | undefined; title: string; url: string; }[]> {
+  return (async () => {
+    if (!(client && org)) {
+      throw Error("Engine not initialized");
+    }
+
+    try {
+      // TODO: Paginate
+      // https://developer.github.com/v3/search/#search-issues-and-pull-requests
+      const data: {
+        items: {
+          body: null | string;
+          html_url: string;
+          number: number;
+          pull_request?: object;
+          title: string;
+          /** e.g. "2020-06-29T21:46:58Z" */
+          updated_at: string;
+          user: { login: string; };
+        }[];
+      } = (
+        await client.get("/search/issues", {
+          params: {
+            per_page: 100,
+            q: /\b(is|author|org):\w/.test(q)
+              ? /\borg:\w/.test(q)
+                ? q
+                : `org:${org} ${q}`
+              : `org:${org} "${escapeQuotes(q)}"`,
+          },
+        })
+      ).data;
+      return data.items.map(item => ({
+        modified: getUnixTime(item.updated_at),
+        snippet: item.body
+          ? `<blockquote>${marked(item.body)}</blockquote>`
+          : undefined,
+        title: `${item.pull_request ? "PR" : "Issue"} in ${item.html_url.match(/github\.com\/([^\/]+\/[^\/]+)\//)?.[1]}: ${item.title}`,
+        url: item.html_url,
+      }));
+    } catch {
+      return [];
+    }
+  })();
+}
+
+function searchCode(q: string): Promise<{ modified: number; snippet: string; title: string; url: string; }[]> {
+  return (async () => {
+    if (!(client && org)) {
+      throw Error("Engine not initialized");
+    }
+
+    try {
+      // TODO: Paginate
+      // https://developer.github.com/v3/search/#search-code
+      const data: {
+        items: {
+          html_url: string;
+          name: string;
+          text_matches: {
+            fragment: string;
+          }[];
+          updated_at: string;
+          user: { login: string; };
+        }[];
+      } = (
+        await client.get("/search/code", {
+          headers: {
+            Accept: "application/vnd.github.text-match+json"
+          },
+          params: {
+            per_page: 100,
+            q: /\b(is|author|org):\w/.test(q)
+              ? /\borg:\w/.test(q)
+                ? q
+                : `org:${org} ${q}`
+              : `org:${org} "${escapeQuotes(q)}"`,
+          },
+        })
+      ).data;
+      return data.items.map(item => ({
+        modified: getUnixTime(item.updated_at),
+        snippet: [
+          ...(item.text_matches ?? [])
+            .map(m => `${m.fragment}`)
+        ].join("<br>"),
+        title: `"Code" in ${item.html_url.match(/github\.com\/([^\/]+\/[^\/]+)\//)?.[1]}: ${item.name}`,
+        url: item.html_url,
+      }));
+    } catch {
+      return [];
+    }
+  })();
+}
+
+
